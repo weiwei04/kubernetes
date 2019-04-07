@@ -343,7 +343,7 @@ func NewProxier(ipt utiliptables.Interface,
 		networkInterfacer:        utilproxy.RealNetwork{},
 	}
 	burstSyncs := 2
-	glog.V(3).Infof("minSyncPeriod: %v, syncPeriod: %v, burstSyncs: %d", minSyncPeriod, syncPeriod, burstSyncs)
+	glog.V(2).Infof("minSyncPeriod: %v, syncPeriod: %v, burstSyncs: %d", minSyncPeriod, syncPeriod, burstSyncs)
 	proxier.syncRunner = async.NewBoundedFrequencyRunner("sync-runner", proxier.syncProxyRules, minSyncPeriod, syncPeriod, burstSyncs)
 	return proxier, nil
 }
@@ -506,8 +506,21 @@ func (proxier *Proxier) OnServiceAdd(service *api.Service) {
 }
 
 func (proxier *Proxier) OnServiceUpdate(oldService, service *api.Service) {
+	var (
+		oldSvc string
+		svc    string
+	)
+	if oldService != nil {
+		oldSvc = oldService.Namespace + "/" + oldService.Name
+	}
+	if service != nil {
+		svc = service.Namespace + "/" + service.Name
+	}
 	if proxier.serviceChanges.Update(oldService, service) && proxier.isInitialized() {
+		glog.V(2).Infof("FUCK SVC %s -> %s Updated will sync", oldSvc, svc)
 		proxier.syncRunner.Run()
+	} else {
+		glog.V(2).Infof("FUCK SVC %s -> %s Nothing changed", oldSvc, svc)
 	}
 }
 
@@ -522,6 +535,8 @@ func (proxier *Proxier) OnServiceSynced() {
 	proxier.setInitialized(proxier.servicesSynced && proxier.endpointsSynced)
 	proxier.mu.Unlock()
 
+	glog.V(2).Infof("FUCK OnServiceSynced")
+
 	// Sync unconditionally - this is called once per lifetime.
 	proxier.syncProxyRules()
 }
@@ -531,8 +546,21 @@ func (proxier *Proxier) OnEndpointsAdd(endpoints *api.Endpoints) {
 }
 
 func (proxier *Proxier) OnEndpointsUpdate(oldEndpoints, endpoints *api.Endpoints) {
+	var (
+		old string
+		ep  string
+	)
+	if oldEndpoints != nil {
+		old = oldEndpoints.Namespace + "/" + oldEndpoints.Name
+	}
+	if endpoints != nil {
+		ep = endpoints.Namespace + "/" + endpoints.Name
+	}
 	if proxier.endpointsChanges.Update(oldEndpoints, endpoints) && proxier.isInitialized() {
+		glog.V(2).Infof("FUCK EP %s -> %s Updated will sync", old, ep)
 		proxier.syncRunner.Run()
+	} else {
+		glog.V(2).Infof("FUCK EP %s -> %s Nothing changed", old, ep)
 	}
 }
 
@@ -545,6 +573,8 @@ func (proxier *Proxier) OnEndpointsSynced() {
 	proxier.endpointsSynced = true
 	proxier.setInitialized(proxier.servicesSynced && proxier.endpointsSynced)
 	proxier.mu.Unlock()
+
+	glog.V(2).Infof("FUCK OnEndpointsSynced")
 
 	// Sync unconditionally - this is called once per lifetime.
 	proxier.syncProxyRules()
@@ -616,11 +646,11 @@ func (proxier *Proxier) syncProxyRules() {
 	start := time.Now()
 	defer func() {
 		metrics.SyncProxyRulesLatency.Observe(metrics.SinceInMicroseconds(start))
-		glog.V(4).Infof("syncProxyRules took %v", time.Since(start))
+		glog.V(2).Infof("FUCK syncProxyRules took %v", time.Since(start))
 	}()
 	// don't sync rules till we've received services and endpoints
 	if !proxier.endpointsSynced || !proxier.servicesSynced {
-		glog.V(2).Info("Not syncing iptables until Services and Endpoints have been received from master")
+		glog.V(2).Info("FUCK Not syncing iptables until Services and Endpoints have been received from master")
 		return
 	}
 
@@ -639,7 +669,7 @@ func (proxier *Proxier) syncProxyRules() {
 		}
 	}
 
-	glog.V(3).Infof("Syncing iptables rules")
+	glog.V(2).Infof("Syncing iptables rules")
 
 	// Create and link the kube chains.
 	for _, chain := range iptablesJumpChains {
