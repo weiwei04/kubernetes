@@ -288,9 +288,9 @@ func NewProxier(ipt utiliptables.Interface,
 	nodePortAddresses []string,
 ) (*Proxier, error) {
 	// Set the route_localnet sysctl we need for
-	if err := sysctl.SetSysctl(sysctlRouteLocalnet, 1); err != nil {
-		return nil, fmt.Errorf("can't set sysctl %s: %v", sysctlRouteLocalnet, err)
-	}
+	//if err := sysctl.SetSysctl(sysctlRouteLocalnet, 1); err != nil {
+	//	return nil, fmt.Errorf("can't set sysctl %s: %v", sysctlRouteLocalnet, err)
+	//}
 
 	// Proxy needs br_netfilter and bridge-nf-call-iptables=1 when containers
 	// are connected to a Linux bridge (but not SDN bridges).  Until most

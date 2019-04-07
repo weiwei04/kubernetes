@@ -173,12 +173,12 @@ func newProxyServer(
 		// No turning back. Remove artifacts that might still exist from the userspace Proxier.
 		glog.V(0).Info("Tearing down inactive rules.")
 		// TODO this has side effects that should only happen when Run() is invoked.
-		userspace.CleanupLeftovers(iptInterface)
+		//userspace.CleanupLeftovers(iptInterface)
 		// IPVS Proxier will generate some iptables rules, need to clean them before switching to other proxy mode.
 		// Besides, ipvs proxier will create some ipvs rules as well.  Because there is no way to tell if a given
 		// ipvs rule is created by IPVS proxier or not.  Users should explicitly specify `--clean-ipvs=true` to flush
 		// all ipvs rules when kube-proxy start up.  Users do this operation should be with caution.
-		ipvs.CleanupLeftovers(ipvsInterface, iptInterface, ipsetInterface, cleanupIPVS)
+		//ipvs.CleanupLeftovers(ipvsInterface, iptInterface, ipsetInterface, cleanupIPVS)
 	} else if proxyMode == proxyModeIPVS {
 		glog.V(0).Info("Using ipvs Proxier.")
 		proxierIPVS, err := ipvs.NewProxier(

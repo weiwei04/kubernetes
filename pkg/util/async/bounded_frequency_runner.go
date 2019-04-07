@@ -231,13 +231,13 @@ func (bfr *BoundedFrequencyRunner) tryRun() {
 	elapsed := bfr.timer.Since(bfr.lastRun)    // how long since last run
 	nextPossible := bfr.minInterval - elapsed  // time to next possible run
 	nextScheduled := bfr.maxInterval - elapsed // time to next periodic run
-	glog.V(2).Infof("%s: %v since last run, possible in %v, scheduled in %v", bfr.name, elapsed, nextPossible, nextScheduled)
+	glog.V(2).Infof("FUCK %s: %v since last run, possible in %v, scheduled in %v", bfr.name, elapsed, nextPossible, nextScheduled)
 
 	if nextPossible < nextScheduled {
 		// Set the timer for ASAP, but don't drain here.  Assuming Loop is running,
 		// it might get a delivery in the mean time, but that is OK.
 		bfr.timer.Stop()
 		bfr.timer.Reset(nextPossible)
-		glog.V(2).Infof("%s: throttled, scheduling run in %v", bfr.name, nextPossible)
+		glog.V(2).Infof("FUCK %s: throttled, scheduling run in %v", bfr.name, nextPossible)
 	}
 }
