@@ -123,9 +123,12 @@ func (ect *EndpointChangeTracker) Update(previous, current *api.Endpoints) bool 
 		return false
 	}
 	namespacedName := types.NamespacedName{Namespace: endpoints.Namespace, Name: endpoints.Name}
+	glog.V(2).Infof("FUCK check if %s changed", namespacedName)
 
 	ect.lock.Lock()
 	defer ect.lock.Unlock()
+
+	glog.V(2).Infof("FUCK acquired lock to check if %s changed", namespacedName)
 
 	change, exists := ect.items[namespacedName]
 	if !exists {
