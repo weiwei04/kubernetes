@@ -26,6 +26,7 @@ import (
 	"encoding/base32"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -552,9 +553,25 @@ func (proxier *Proxier) OnEndpointsUpdate(oldEndpoints, endpoints *api.Endpoints
 	)
 	if oldEndpoints != nil {
 		old = oldEndpoints.Namespace + "/" + oldEndpoints.Name
+		if old == "kube-system/kube-dns" {
+			eps := []string{}
+			for _, addr := range oldEndpoints.Subsets[0].Addresses {
+				eps = append(eps, addr.IP)
+			}
+			sort.Strings(eps)
+			glog.V(2).Infof("FUCK old kube-dns ep:%+v", eps)
+		}
 	}
 	if endpoints != nil {
 		ep = endpoints.Namespace + "/" + endpoints.Name
+		if ep == "kube-system/kube-dns" {
+			eps := []string{}
+			for _, addr := range endpoints.Subsets[0].Addresses {
+				eps = append(eps, addr.IP)
+			}
+			sort.Strings(eps)
+			glog.V(2).Infof("FUCK new kube-dns ep:%+v", eps)
+		}
 	}
 	if proxier.endpointsChanges.Update(oldEndpoints, endpoints) && proxier.isInitialized() {
 		glog.V(2).Infof("FUCK EP %s -> %s Updated will sync", old, ep)
@@ -788,6 +805,13 @@ func (proxier *Proxier) syncProxyRules() {
 		protocol := strings.ToLower(string(svcInfo.Protocol))
 		svcNameString := svcInfo.serviceNameString
 		hasEndpoints := len(proxier.endpointsMap[svcName]) > 0
+
+		glog.V(2).Infof("FUCK proxier.serviceMap %s", svcName)
+		if hasEndpoints {
+			for _, ep := range proxier.endpointsMap[svcName] {
+				glog.V(2).Infof("FUCK %s ep: %s", svcName, ep.String())
+			}
+		}
 
 		svcChain := svcInfo.servicePortChainName
 		if hasEndpoints {
