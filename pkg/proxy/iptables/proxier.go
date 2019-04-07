@@ -657,6 +657,7 @@ func (proxier *Proxier) deleteEndpointConnections(connectionMap []proxy.ServiceE
 // The only other iptables rules are those that are setup in iptablesInit()
 // This assumes proxier.mu is NOT held
 func (proxier *Proxier) syncProxyRules() {
+	return
 	proxier.mu.Lock()
 	defer proxier.mu.Unlock()
 
