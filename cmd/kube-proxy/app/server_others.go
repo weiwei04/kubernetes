@@ -23,32 +23,22 @@ package app
 import (
 	"errors"
 	"fmt"
-	"net"
 
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	utilnet "k8s.io/apimachinery/pkg/util/net"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/record"
+	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/proxy"
 	proxyconfigapi "k8s.io/kubernetes/pkg/proxy/apis/kubeproxyconfig"
 	proxyconfig "k8s.io/kubernetes/pkg/proxy/config"
-	"k8s.io/kubernetes/pkg/proxy/healthcheck"
 	"k8s.io/kubernetes/pkg/proxy/iptables"
 	"k8s.io/kubernetes/pkg/proxy/ipvs"
-	"k8s.io/kubernetes/pkg/proxy/metrics"
-	"k8s.io/kubernetes/pkg/proxy/userspace"
 	"k8s.io/kubernetes/pkg/util/configz"
-	utildbus "k8s.io/kubernetes/pkg/util/dbus"
-	utilipset "k8s.io/kubernetes/pkg/util/ipset"
-	utiliptables "k8s.io/kubernetes/pkg/util/iptables"
-	utilipvs "k8s.io/kubernetes/pkg/util/ipvs"
 	utilnode "k8s.io/kubernetes/pkg/util/node"
-	utilsysctl "k8s.io/kubernetes/pkg/util/sysctl"
-	"k8s.io/utils/exec"
 
 	"github.com/golang/glog"
 )
@@ -75,38 +65,6 @@ func newProxyServer(
 		return nil, fmt.Errorf("unable to register configz: %s", err)
 	}
 
-	protocol := utiliptables.ProtocolIpv4
-	if net.ParseIP(config.BindAddress).To4() == nil {
-		glog.V(0).Infof("IPv6 bind address (%s), assume IPv6 operation", config.BindAddress)
-		protocol = utiliptables.ProtocolIpv6
-	}
-
-	var iptInterface utiliptables.Interface
-	var ipvsInterface utilipvs.Interface
-	var kernelHandler ipvs.KernelHandler
-	var ipsetInterface utilipset.Interface
-	var dbus utildbus.Interface
-
-	// Create a iptables utils.
-	execer := exec.New()
-
-	dbus = utildbus.New()
-	iptInterface = utiliptables.New(execer, dbus, protocol)
-	ipvsInterface = utilipvs.New(execer)
-	kernelHandler = ipvs.NewLinuxKernelHandler()
-	ipsetInterface = utilipset.New(execer)
-
-	// We omit creation of pretty much everything if we run in cleanup mode
-	if cleanupAndExit {
-		return &ProxyServer{
-			execer:         execer,
-			IptInterface:   iptInterface,
-			IpvsInterface:  ipvsInterface,
-			IpsetInterface: ipsetInterface,
-			CleanupAndExit: cleanupAndExit,
-		}, nil
-	}
-
 	client, eventClient, err := createClients(config.ClientConnection, master)
 	if err != nil {
 		return nil, err
@@ -124,154 +82,75 @@ func newProxyServer(
 		Namespace: "",
 	}
 
-	var healthzServer *healthcheck.HealthzServer
-	var healthzUpdater healthcheck.HealthzUpdater
-	if len(config.HealthzBindAddress) > 0 {
-		healthzServer = healthcheck.NewDefaultHealthzServer(config.HealthzBindAddress, 2*config.IPTables.SyncPeriod.Duration, recorder, nodeRef)
-		healthzUpdater = healthzServer
-	}
-
 	var proxier proxy.ProxyProvider
-	var serviceEventHandler proxyconfig.ServiceHandler
-	var endpointsEventHandler proxyconfig.EndpointsHandler
-
-	proxyMode := getProxyMode(string(config.Mode), iptInterface, kernelHandler, ipsetInterface, iptables.LinuxKernelCompatTester{})
-	if proxyMode == proxyModeIPTables {
-		glog.V(0).Info("Using iptables Proxier.")
-		nodeIP := net.ParseIP(config.BindAddress)
-		if nodeIP.Equal(net.IPv4zero) || nodeIP.Equal(net.IPv6zero) {
-			nodeIP = getNodeIP(client, hostname)
-		}
-		if config.IPTables.MasqueradeBit == nil {
-			// MasqueradeBit must be specified or defaulted.
-			return nil, fmt.Errorf("unable to read IPTables MasqueradeBit from config")
-		}
-
-		// TODO this has side effects that should only happen when Run() is invoked.
-		proxierIPTables, err := iptables.NewProxier(
-			iptInterface,
-			utilsysctl.New(),
-			execer,
-			config.IPTables.SyncPeriod.Duration,
-			config.IPTables.MinSyncPeriod.Duration,
-			config.IPTables.MasqueradeAll,
-			int(*config.IPTables.MasqueradeBit),
-			config.ClusterCIDR,
-			hostname,
-			nodeIP,
-			recorder,
-			healthzUpdater,
-			config.NodePortAddresses,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("unable to create proxier: %v", err)
-		}
-		metrics.RegisterMetrics()
-		proxier = proxierIPTables
-		serviceEventHandler = proxierIPTables
-		endpointsEventHandler = proxierIPTables
-		// No turning back. Remove artifacts that might still exist from the userspace Proxier.
-		glog.V(0).Info("Tearing down inactive rules.")
-		// TODO this has side effects that should only happen when Run() is invoked.
-		//userspace.CleanupLeftovers(iptInterface)
-		// IPVS Proxier will generate some iptables rules, need to clean them before switching to other proxy mode.
-		// Besides, ipvs proxier will create some ipvs rules as well.  Because there is no way to tell if a given
-		// ipvs rule is created by IPVS proxier or not.  Users should explicitly specify `--clean-ipvs=true` to flush
-		// all ipvs rules when kube-proxy start up.  Users do this operation should be with caution.
-		//ipvs.CleanupLeftovers(ipvsInterface, iptInterface, ipsetInterface, cleanupIPVS)
-	} else if proxyMode == proxyModeIPVS {
-		glog.V(0).Info("Using ipvs Proxier.")
-		proxierIPVS, err := ipvs.NewProxier(
-			iptInterface,
-			ipvsInterface,
-			ipsetInterface,
-			utilsysctl.New(),
-			execer,
-			config.IPVS.SyncPeriod.Duration,
-			config.IPVS.MinSyncPeriod.Duration,
-			config.IPTables.MasqueradeAll,
-			int(*config.IPTables.MasqueradeBit),
-			config.ClusterCIDR,
-			hostname,
-			getNodeIP(client, hostname),
-			recorder,
-			healthzServer,
-			config.IPVS.Scheduler,
-			config.NodePortAddresses,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("unable to create proxier: %v", err)
-		}
-		metrics.RegisterMetrics()
-		proxier = proxierIPVS
-		serviceEventHandler = proxierIPVS
-		endpointsEventHandler = proxierIPVS
-		glog.V(0).Info("Tearing down inactive rules.")
-		// TODO this has side effects that should only happen when Run() is invoked.
-		userspace.CleanupLeftovers(iptInterface)
-		iptables.CleanupLeftovers(iptInterface)
-	} else {
-		glog.V(0).Info("Using userspace Proxier.")
-		// This is a proxy.LoadBalancer which NewProxier needs but has methods we don't need for
-		// our config.EndpointsConfigHandler.
-		loadBalancer := userspace.NewLoadBalancerRR()
-		// set EndpointsConfigHandler to our loadBalancer
-		endpointsEventHandler = loadBalancer
-
-		// TODO this has side effects that should only happen when Run() is invoked.
-		proxierUserspace, err := userspace.NewProxier(
-			loadBalancer,
-			net.ParseIP(config.BindAddress),
-			iptInterface,
-			execer,
-			*utilnet.ParsePortRangeOrDie(config.PortRange),
-			config.IPTables.SyncPeriod.Duration,
-			config.IPTables.MinSyncPeriod.Duration,
-			config.UDPIdleTimeout.Duration,
-			config.NodePortAddresses,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("unable to create proxier: %v", err)
-		}
-		serviceEventHandler = proxierUserspace
-		proxier = proxierUserspace
-
-		// Remove artifacts from the iptables and ipvs Proxier, if not on Windows.
-		glog.V(0).Info("Tearing down inactive rules.")
-		// TODO this has side effects that should only happen when Run() is invoked.
-		iptables.CleanupLeftovers(iptInterface)
-		// IPVS Proxier will generate some iptables rules, need to clean them before switching to other proxy mode.
-		// Besides, ipvs proxier will create some ipvs rules as well.  Because there is no way to tell if a given
-		// ipvs rule is created by IPVS proxier or not.  Users should explicitly specify `--clean-ipvs=true` to flush
-		// all ipvs rules when kube-proxy start up.  Users do this operation should be with caution.
-		ipvs.CleanupLeftovers(ipvsInterface, iptInterface, ipsetInterface, cleanupIPVS)
-	}
-
-	iptInterface.AddReloadFunc(proxier.Sync)
+	var serviceEventHandler proxyconfig.ServiceHandler = &serviceHandler{}
+	var endpointsEventHandler proxyconfig.EndpointsHandler = &endpointHandler{}
 
 	return &ProxyServer{
-		Client:                 client,
-		EventClient:            eventClient,
-		IptInterface:           iptInterface,
-		IpvsInterface:          ipvsInterface,
-		IpsetInterface:         ipsetInterface,
-		execer:                 execer,
-		Proxier:                proxier,
-		Broadcaster:            eventBroadcaster,
-		Recorder:               recorder,
-		ConntrackConfiguration: config.Conntrack,
-		Conntracker:            &realConntracker{},
-		ProxyMode:              proxyMode,
-		NodeRef:                nodeRef,
-		MetricsBindAddress:     config.MetricsBindAddress,
-		EnableProfiling:        config.EnableProfiling,
-		OOMScoreAdj:            config.OOMScoreAdj,
-		ResourceContainer:      config.ResourceContainer,
-		ConfigSyncPeriod:       config.ConfigSyncPeriod.Duration,
-		ServiceEventHandler:    serviceEventHandler,
-		EndpointsEventHandler:  endpointsEventHandler,
-		HealthzServer:          healthzServer,
+		Client:                client,
+		EventClient:           eventClient,
+		Broadcaster:           eventBroadcaster,
+		Recorder:              recorder,
+		ProxyMode:             proxyMode,
+		NodeRef:               nodeRef,
+		MetricsBindAddress:    config.MetricsBindAddress,
+		ResourceContainer:     config.ResourceContainer,
+		ConfigSyncPeriod:      config.ConfigSyncPeriod.Duration,
+		ServiceEventHandler:   serviceEventHandler,
+		EndpointsEventHandler: endpointsEventHandler,
 	}, nil
+}
+
+type serviceHandler struct {
+}
+
+func (s *serviceHandler) OnServiceAdd(service *api.Service) {
+
+}
+
+// OnServiceUpdate is called whenever modification of an existing
+// service object is observed.
+func (s *serviceHandler) OnServiceUpdate(oldService, service *api.Service) {
+
+}
+
+// OnServiceDelete is called whenever deletion of an existing service
+// object is observed.
+func (s *serviceHandler) OnServiceDelete(service *api.Service) {
+
+}
+
+// OnServiceSynced is called once all the initial even handlers were
+// called and the state is fully propagated to local cache.
+func (s *serviceHandler) OnServiceSynced() {
+
+}
+
+type endpointsHandler struct {
+}
+
+// OnEndpointsAdd is called whenever creation of new endpoints object
+// is observed.
+func (e *endpointsHandler) OnEndpointsAdd(endpoints *api.Endpoints) {
+
+}
+
+// OnEndpointsUpdate is called whenever modification of an existing
+// endpoints object is observed.
+func (e *endpointsHandler) OnEndpointsUpdate(oldEndpoints, endpoints *api.Endpoints) {
+
+}
+
+// OnEndpointsDelete is called whever deletion of an existing endpoints
+// object is observed.
+func (e *endpointsHandler) OnEndpointsDelete(endpoints *api.Endpoints) {
+
+}
+
+// OnEndpointsSynced is called once all the initial event handlers were
+// called and the state is fully propagated to local cache.
+func (e *endpointsHandler) OnEndpointsSynced() {
+
 }
 
 func getProxyMode(proxyMode string, iptver iptables.IPTablesVersioner, khandle ipvs.KernelHandler, ipsetver ipvs.IPSetVersioner, kcompat iptables.KernelCompatTester) string {
